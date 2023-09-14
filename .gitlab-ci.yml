@@ -1,0 +1,61 @@
+variables:
+  DOCKER_REGISTRY: "127.0.0.1:5000"
+  SERVER_NAME: my-server
+
+stages:
+  - test
+  - build
+  - deploy
+
+test-job:
+  stage: test
+  only:
+    - tags
+  script:
+    - whoami
+    - pwd
+    - echo 'test job'
+
+build-image-job:
+  stage: build
+  image: docker:24.0.6-git
+  services:
+    - docker:24.0.6-dind
+  only:
+    - tags
+  script:
+    - echo 'image build job'
+    - docker info
+    - docker build -t ${DOCKER_REGISTRY}/${SERVER_NAME}:$CI_COMMIT_TAG .
+    - docker push ${DOCKER_REGISTRY}/${SERVER_NAME}:$CI_COMMIT_TAG
+    - docker images
+
+# k8s/k3s 部署
+# 1、首先配置连接到 k8s/k3s 集群的配置文件
+# k3s 配置文件 /etc/rancher/k3s/k3s.yaml
+# 2、export KUBECONFIG
+# 如果需要使用 kubectl 或者 helm 需要先把配置文件 export
+# export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+deploy-job:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  variables:
+    IMAGE_TAG: IMAGE_TAG
+    DEPLOY_TAG: ${DOCKER_REGISTRY}/${SERVER_NAME}:$CI_COMMIT_TAG
+  only:
+    - tags
+  needs:
+    - build-image-job
+  script:
+    - echo 'deploy job'
+    - pwd
+    - ls
+    - cp ./kube/kubeClusterConfig.yaml ./cluster_config.yaml
+    - export KUBECONFIG=./cluster_config.yaml
+    - kubectl version
+    - kubectl get nodes
+    - cp ./kube/deploy.yaml ./current_tag.yaml
+    - sed -i "s#${IMAGE_TAG}#$DEPLOY_TAG#g" ./current_tag.yaml  # sed 's/要被取代的字串/新的字串/g'，将斜杠（/）改为井号（#）。即使变量中包含斜杠（/），sed 命令也能够正确解析。
+    - cat ./current_tag.yaml
+    - kubectl apply -f ./current_tag.yaml
